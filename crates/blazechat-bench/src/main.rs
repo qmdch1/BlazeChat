@@ -25,6 +25,8 @@ struct Args {
     duration: u64,
     #[arg(long, default_value_t = 10)]
     warmup: u64,
+    #[arg(long, default_value_t = 15)]
+    drain: u64,
     #[arg(long, default_value_t = 10)]
     messages_per_second: u64,
     #[arg(long, default_value_t = 16)]
@@ -151,8 +153,10 @@ async fn run_client(
     let (mut tx, mut rx) = socket.split();
     let user = format!("bench-{id}");
     let room = format!("room-{}", id % args.rooms.max(1));
-    let deadline = Instant::now() + Duration::from_secs(args.warmup + args.duration);
+    let send_deadline = Instant::now() + Duration::from_secs(args.warmup + args.duration);
+    let drain_deadline = send_deadline + Duration::from_secs(args.drain);
     let measure_after = Instant::now() + Duration::from_secs(args.warmup);
+    let measure_after_ns = unix_time_ns().saturating_add(args.warmup.saturating_mul(1_000_000_000));
     let interval = if args.mode == Mode::Throughput && args.messages_per_second > 0 {
         Some(Duration::from_nanos(
             1_000_000_000 / args.messages_per_second,
@@ -165,19 +169,22 @@ async fn run_client(
 
     loop {
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline.into()) => break,
+            _ = tokio::time::sleep_until(drain_deadline.into()) => break,
             incoming = rx.next() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        if Instant::now() >= measure_after {
-                            counters.wire_received.fetch_add(1, Ordering::Relaxed);
-                        }
                         if let Ok(message) = serde_json::from_str::<Incoming>(&text)
-                            && message.user == user && Instant::now() >= measure_after {
-                            let latency_us = unix_time_ns().saturating_sub(message.client_ts_ns) / 1_000;
-                            if latency_us > 0 {
-                                let _ = histogram.record(latency_us);
-                                counters.received.fetch_add(1, Ordering::Relaxed);
+                            && message.client_ts_ns >= measure_after_ns
+                            && Instant::now() >= measure_after
+                        {
+                            counters.wire_received.fetch_add(1, Ordering::Relaxed);
+                            if message.user == user {
+                                let latency_us =
+                                    unix_time_ns().saturating_sub(message.client_ts_ns) / 1_000;
+                                if latency_us > 0 {
+                                    let _ = histogram.record(latency_us);
+                                    counters.received.fetch_add(1, Ordering::Relaxed);
+                                }
                             }
                         }
                     }
@@ -189,13 +196,17 @@ async fn run_client(
                 }
             }
             _ = async {
-                match ticker.as_mut() {
-                    Some(value) => value.tick().await,
-                    None => std::future::pending().await,
+                if Instant::now() < send_deadline {
+                    match ticker.as_mut() {
+                        Some(value) => value.tick().await,
+                        None => std::future::pending().await,
+                    }
+                } else {
+                    std::future::pending().await
                 }
             } => {
-                if Instant::now() >= deadline {
-                    break;
+                if Instant::now() >= send_deadline {
+                    continue;
                 }
                 sequence += 1;
                 let payload = serde_json::to_string(&Outgoing {
@@ -214,7 +225,7 @@ async fn run_client(
                 }
             }
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= drain_deadline {
             break;
         }
     }

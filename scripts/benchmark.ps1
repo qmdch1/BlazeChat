@@ -2,6 +2,7 @@ param(
     [int]$Connections = 1000,
     [int]$Duration = 30,
     [int]$Warmup = 10,
+    [int]$Drain = 15,
     [int]$MessagesPerSecond = 10
 )
 
@@ -27,6 +28,7 @@ try {
         --connections $Connections `
         --duration $Duration `
         --warmup $Warmup `
+        --drain $Drain `
         --messages-per-second $MessagesPerSecond |
         Tee-Object -FilePath $output
 } finally {

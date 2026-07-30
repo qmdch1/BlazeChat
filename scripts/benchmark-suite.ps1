@@ -1,8 +1,9 @@
 param(
     [int]$Duration = 30,
     [int]$Warmup = 10,
+    [int]$Drain = 15,
     [int[]]$ConnectionSteps = @(1000, 5000, 10000, 25000, 50000),
-    [int[]]$RateSteps = @(1, 5, 10, 25, 50),
+    [int[]]$RateSteps = @(1, 2, 3, 4, 5, 10, 25, 50),
     [int]$ThroughputConnections = 1000
 )
 
@@ -23,6 +24,7 @@ function Invoke-Benchmark {
         --connections $Connections `
         --duration $Duration `
         --warmup $Warmup `
+        --drain $Drain `
         --messages-per-second $Rate
     $lines | Add-Content -Path $rawOutput
     $values = @{}
@@ -35,6 +37,7 @@ function Invoke-Benchmark {
 }
 
 docker compose up -d --build redis chat1 chat2 chat3 chat4 proxy
+Start-Sleep -Seconds 5
 docker compose build bench
 
 $rows = @()
@@ -45,6 +48,9 @@ foreach ($connections in $ConnectionSteps) {
         Connections = $result.connected
         Published = $result.published_messages_per_second
         Delivered = $result.delivered_messages_per_second
+        Sent = $result.sent
+        Received = $result.received
+        Echo = "-"
         P50 = "-"
         P95 = "-"
         P99 = "-"
@@ -63,6 +69,11 @@ foreach ($rate in $RateSteps) {
         Connections = $result.connected
         Published = $result.published_messages_per_second
         Delivered = $result.delivered_messages_per_second
+        Sent = $result.sent
+        Received = $result.received
+        Echo = if ([double]$result.sent -gt 0) {
+            "{0:N1}%" -f (100 * [double]$result.received / [double]$result.sent)
+        } else { "-" }
         P50 = $result.latency_p50_ms
         P95 = $result.latency_p95_ms
         P99 = $result.latency_p99_ms
@@ -81,14 +92,14 @@ $markdown = @(
     "# BlazeChat benchmark ($stamp)"
     ""
     "- Server budget: 4 CPU cores (chat 3.0, Redis 0.5, HAProxy 0.5)"
-    "- Warmup: ${Warmup}s; measurement: ${Duration}s"
+    "- Warmup: ${Warmup}s; measurement: ${Duration}s; drain: ${Drain}s"
     "- Sustainable threshold: >=99% own-message echo and zero connection errors"
     ""
-    "| Test | Connections | Published chat/s | Delivered msg/s | p50 ms | p95 ms | p99 ms | max ms | Errors |"
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+    "| Test | Connections | Sent | Own echo | Echo success | Published chat/s | Delivered msg/s | p50 ms | p95 ms | p99 ms | max ms | Errors |"
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 )
 foreach ($row in $rows) {
-    $markdown += "| $($row.Test) | $($row.Connections) | $($row.Published) | $($row.Delivered) | $($row.P50) | $($row.P95) | $($row.P99) | $($row.Max) | $($row.Errors) |"
+    $markdown += "| $($row.Test) | $($row.Connections) | $($row.Sent) | $($row.Received) | $($row.Echo) | $($row.Published) | $($row.Delivered) | $($row.P50) | $($row.P95) | $($row.P99) | $($row.Max) | $($row.Errors) |"
 }
 $markdown | Set-Content -Encoding utf8 -Path $markdownOutput
 docker compose stats --no-stream

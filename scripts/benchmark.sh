@@ -4,6 +4,7 @@ set -euo pipefail
 connections="${CONNECTIONS:-1000}"
 duration="${DURATION:-30}"
 warmup="${WARMUP:-10}"
+drain="${DRAIN:-15}"
 rate="${MESSAGES_PER_SECOND:-10}"
 result_dir="$(cd "$(dirname "$0")/.." && pwd)/benchmark-results"
 mkdir -p "$result_dir"
@@ -21,6 +22,7 @@ docker compose run --rm bench \
   --connections "$connections" \
   --duration "$duration" \
   --warmup "$warmup" \
+  --drain "$drain" \
   --messages-per-second "$rate" | tee "$output"
 docker compose stats --no-stream
 echo "Result saved to $output"
