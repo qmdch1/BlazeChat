@@ -1,0 +1,79 @@
+x-chat: &chat
+  build:
+    context: .
+    target: server
+  restart: unless-stopped
+  environment:
+    REDIS_URL: redis://redis:6379/
+    RUST_LOG: blazechat_server=info
+    FANOUT_CAPACITY: "65536"
+  depends_on:
+    redis:
+      condition: service_healthy
+  cpus: 0.75
+  mem_limit: 1g
+  ulimits:
+    nofile:
+      soft: 1048576
+      hard: 1048576
+
+services:
+  redis:
+    image: redis:8.0-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    cpus: 0.5
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  chat1:
+    <<: *chat
+    environment:
+      REDIS_URL: redis://redis:6379/
+      INSTANCE_ID: chat1
+  chat2:
+    <<: *chat
+    environment:
+      REDIS_URL: redis://redis:6379/
+      INSTANCE_ID: chat2
+  chat3:
+    <<: *chat
+    environment:
+      REDIS_URL: redis://redis:6379/
+      INSTANCE_ID: chat3
+  chat4:
+    <<: *chat
+    environment:
+      REDIS_URL: redis://redis:6379/
+      INSTANCE_ID: chat4
+
+  proxy:
+    image: haproxy:3.2-alpine
+    cpus: 0.5
+    mem_limit: 1g
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - chat1
+      - chat2
+      - chat3
+      - chat4
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  bench:
+    profiles: ["bench"]
+    build:
+      context: .
+      target: bench
